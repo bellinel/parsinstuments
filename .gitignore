@@ -1,0 +1,27 @@
+# Виртуальное окружение
+venv/
+
+# Файлы с секретами
+creds.json
+*.key
+*.pem
+
+# Файлы данных и результатов
+*.csv
+*.json
+output.json
+all_data_*.json
+result.csv
+
+# Системные файлы
+__pycache__/
+*.pyc
+.DS_Store
+Thumbs.db
+
+# Логи
+*.log
+
+# IDE
+.idea/
+.vscode/ 
