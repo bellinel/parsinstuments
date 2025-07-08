@@ -6,6 +6,7 @@ import json
 
 
 
+
 def get_table():
     creds = Credentials.from_service_account_file(
     "creds.json",
@@ -16,7 +17,7 @@ def get_table():
 
     spreadsheet = gc.open_by_url("https://docs.google.com/spreadsheets/d/1Xmu5d2BLW8C4PVYV31xaRAaQTnx0eX6ZCMMeANuYzRU")
 
-    worksheet = spreadsheet.worksheet("Без скрытых полей")
+    worksheet = spreadsheet.worksheet("Данные для парсинга")
 
     row_count = worksheet.row_count
     data = worksheet.get(f'A1:G{row_count}')
@@ -111,14 +112,13 @@ def load_items_from_json_for_etm():
     
 
 
-import gspread
-import json
-from google.oauth2.service_account import Credentials
+
 
 def upload_to_google_sheets_by_url():
     import gspread
     import json
     from google.oauth2.service_account import Credentials
+
 
     spreadsheet_url = "https://docs.google.com/spreadsheets/d/1Xmu5d2BLW8C4PVYV31xaRAaQTnx0eX6ZCMMeANuYzRU"
     scopes = [
@@ -127,53 +127,109 @@ def upload_to_google_sheets_by_url():
     ]
     creds = Credentials.from_service_account_file("creds.json", scopes=scopes)
     client = gspread.authorize(creds)
-
     spreadsheet = client.open_by_url(spreadsheet_url)
 
-    # Создаем или очищаем Лист3
     try:
-        new_sheet = spreadsheet.add_worksheet(title="Лист3", rows="4000", cols="10")
+        sheet = spreadsheet.add_worksheet(title="Спаршенные данные", rows="4000", cols="10")
     except gspread.exceptions.APIError:
-        new_sheet = spreadsheet.worksheet("Лист3")
-        new_sheet.clear()
+        sheet = spreadsheet.worksheet("Спаршенные данные")
+        sheet.clear()
 
-    # Загружаем JSON-файлы
+    # Загружаем данные
+    with open('output.json', 'r', encoding='utf-8') as f_base:
+        base_data = json.load(f_base)
     with open('all_data_vseinstrumenti.json', 'r', encoding='utf-8') as f1:
         vseinstr_data = json.load(f1)
     with open('all_data_etm.json', 'r', encoding='utf-8') as f2:
         etm_data = json.load(f2)
 
-    # Объединяем данные по артикулу
-    vseinstr_map = {item['артикул']: item for item in vseinstr_data}
-    etm_map = {item['артикул']: item for item in etm_data}
-    all_articles = list(set(vseinstr_map.keys()) | set(etm_map.keys()))
+    vseinstr_map = {item['артикул']: item for item in vseinstr_data if 'артикул' in item}
+    etm_map = {item['артикул']: item for item in etm_data if 'артикул' in item}
 
-    merged_data = []
+    rows = []
+    highlight_cells = []  # [(col_letter, row_number)]
+    clear_cells = []
+    for idx, base_item in enumerate(base_data):
+        art = base_item.get('артикул', '')
+        name = base_item.get('наименование товара', '')
+        price = base_item.get('прайс', '')
+        vse_price = ''
+        vse_change = ''
+        etm_price = ''
+        etm_change = ''
+        if art in vseinstr_map:
+            vse_price = vseinstr_map[art].get('цена vseinstrumenti', '')
+            vse_change = vseinstr_map[art].get('изменение (%)', '')
+        if art in etm_map:
+            etm_price = etm_map[art].get('цена etm', '')
+            etm_change = etm_map[art].get('изменение (%)', '')
+        rows.append([art, name, price, vse_price, vse_change, etm_price, etm_change])
 
-    for art in all_articles:
-        v_item = vseinstr_map.get(art, {})
-        e_item = etm_map.get(art, {})
+        row_num = idx + 2  # +2, т.к. первая строка — заголовки
+        # Проверяем % изм. Vseinstr (E)
+        try:
+            vse_pct = float(str(vse_change).replace('%','').replace(',','.'))
+            if vse_pct != 0:
+                highlight_cells.append(('E', row_num))
+            else:
+                clear_cells.append(('E', row_num))
+        except:
+            clear_cells.append(('E', row_num))
+        # Проверяем % изм. ETM (G)
+        try:
+            etm_pct = float(str(etm_change).replace('%','').replace(',','.'))
+            if etm_pct != 0:
+                highlight_cells.append(('G', row_num))
+            else:
+                clear_cells.append(('G', row_num))
+        except:
+            clear_cells.append(('G', row_num))
 
-        brand = v_item.get('бренд') or e_item.get('бренд') or 'не найден артикул на сайте'
-        name = v_item.get('название') or e_item.get('название') or 'не найден артикул на сайте'
-        vse_price = v_item.get('цена vseinstrumenti') or 'не найден артикул на сайте'
-        vse_change = v_item.get('изменение (%)', 'не найден артикул на сайте')
-        etm_price = e_item.get('цена etm') or e_item.get('цена') or 'не найден артикул на сайте'
-        etm_change = e_item.get('изменение (%)', 'не найден артикул на сайте')
+    headers = ['Артикул', 'Наименование', 'Прайс', 'Цена Vseinstrumenti', '% изм. Vseinstr', 'Цена ETM', '% изм. ETM']
+    data = [headers] + rows
 
-        row = [art, brand, name, vse_price, vse_change, etm_price, etm_change]
-        merged_data.append(row)
+    sheet.clear()
+    sheet.update(values=data)
 
-    # Сортируем по названию (3-й элемент строки, индекс 2)
-    merged_data.sort(key=lambda x: str(x[2]).lower())
+    # Формируем batch_update запросы
+    requests = []
+    # Подсветка жёлтым
+    for col, row in highlight_cells:
+        requests.append({
+            "repeatCell": {
+                "range": {
+                    "sheetId": sheet.id,
+                    "startRowIndex": row-1,
+                    "endRowIndex": row,
+                    "startColumnIndex": ord(col)-ord('A'),
+                    "endColumnIndex": ord(col)-ord('A')+1
+                },
+                "cell": {"userEnteredFormat": {"backgroundColor": {"red":1, "green":1, "blue":0}}},
+                "fields": "userEnteredFormat.backgroundColor"
+            }
+        })
+    # Очистка цвета
+    for col, row in clear_cells:
+        requests.append({
+            "repeatCell": {
+                "range": {
+                    "sheetId": sheet.id,
+                    "startRowIndex": row-1,
+                    "endRowIndex": row,
+                    "startColumnIndex": ord(col)-ord('A'),
+                    "endColumnIndex": ord(col)-ord('A')+1
+                },
+                "cell": {"userEnteredFormat": {"backgroundColor": {"red":1, "green":1, "blue":1}}},
+                "fields": "userEnteredFormat.backgroundColor"
+            }
+        })
+    if requests:
+        sheet.spreadsheet.batch_update({"requests": requests})
 
-    # Заголовки
-    headers = ['Артикул', 'Бренд', 'Название', 'Цена Vseinstrumenti', '% изм. Vseinstr', 'Цена ETM', '% изм. ETM']
-    data = [headers] + merged_data
+    print("✅ Данные записаны, подсветка применена пакетно!")
 
-    # Загрузка данных
-    new_sheet.clear()
-    new_sheet.update(data)
 
-    print("✅ Данные успешно загружены в Лист3 таблицы (отсортировано по названию)!")
 
+
+get_table()
+upload_to_google_sheets_by_url()
