@@ -231,5 +231,4 @@ def upload_to_google_sheets_by_url():
 
 
 
-get_table()
-upload_to_google_sheets_by_url()
+

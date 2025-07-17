@@ -149,7 +149,7 @@ def parse_vseinstrumenti():
         #         print(f"Не удалось распарсить цены для {query}: old_price={old_price_str}, new_price={new_price_str}")
 
 
-
+#
 
        
 
